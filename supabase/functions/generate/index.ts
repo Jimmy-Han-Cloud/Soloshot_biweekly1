@@ -1,5 +1,3 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-
 const REPLICATE_API_URL = 'https://api.replicate.com/v1'
 
 const POLL_INTERVAL_MS = 2000
@@ -107,7 +105,7 @@ async function pollPrediction(
   throw new Error('Generation timed out after 120 seconds')
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
