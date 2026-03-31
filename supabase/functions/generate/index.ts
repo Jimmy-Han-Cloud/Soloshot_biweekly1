@@ -28,23 +28,28 @@ async function createPrediction(
 ): Promise<ReplicatePrediction> {
   const stylePrompt =
     payload.style === 'stylized'
-      ? 'stylized illustration portrait, vibrant colors, full body'
-      : 'realistic full body photo portrait, natural lighting, high detail, professional'
+      ? 'full body portrait of this person, stylized illustration, vibrant colors, travel location background, standing pose'
+      : 'full body photo of this person standing in a scenic travel location, natural lighting, high quality, professional photography, whole body visible'
+
+  // Use selfie as image reference; flux-dev img2img preserves the person's appearance
+  const selfieDataUri = `data:image/jpeg;base64,${payload.selfie_image}`
 
   const body = {
     input: {
       prompt: stylePrompt,
+      image: selfieDataUri,
+      strength: 0.7,           // 0.7 = significant scene change while preserving person
       num_outputs: payload.num_outputs ?? 3,
       aspect_ratio: '2:3',
       output_format: 'jpg',
+      guidance_scale: 3.5,
     },
   }
 
-  console.log('Creating prediction with model: black-forest-labs/flux-schnell')
+  console.log('Creating prediction with model: black-forest-labs/flux-dev (img2img)')
 
-  // Use the model-specific endpoint (no version hash needed for official models)
   const response = await fetch(
-    `${REPLICATE_API_URL}/models/black-forest-labs/flux-schnell/predictions`,
+    `${REPLICATE_API_URL}/models/black-forest-labs/flux-dev/predictions`,
     {
       method: 'POST',
       headers: {
