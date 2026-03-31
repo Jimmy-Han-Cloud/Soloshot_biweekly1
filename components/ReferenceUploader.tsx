@@ -18,7 +18,7 @@ export function ReferenceUploader({ images, onAdd, onRemove }: ReferenceUploader
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: 'images' as const,
         allowsMultipleSelection: true,
         quality: 1,
       })
