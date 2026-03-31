@@ -32,7 +32,6 @@ async function createPrediction(
       : 'realistic full body photo portrait, natural lighting, high detail, professional'
 
   const body = {
-    model: 'black-forest-labs/flux-schnell',
     input: {
       prompt: stylePrompt,
       num_outputs: payload.num_outputs ?? 3,
@@ -43,15 +42,19 @@ async function createPrediction(
 
   console.log('Creating prediction with model: black-forest-labs/flux-schnell')
 
-  const response = await fetch(`${REPLICATE_API_URL}/predictions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'wait',
-    },
-    body: JSON.stringify(body),
-  })
+  // Use the model-specific endpoint (no version hash needed for official models)
+  const response = await fetch(
+    `${REPLICATE_API_URL}/models/black-forest-labs/flux-schnell/predictions`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'wait',
+      },
+      body: JSON.stringify(body),
+    }
+  )
 
   const responseText = await response.text()
   console.log('Replicate create response status:', response.status)
