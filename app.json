@@ -14,7 +14,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "SoloShot needs camera access to take your selfie.",
+        "NSPhotoLibraryUsageDescription": "SoloShot needs photo library access to select reference images.",
+        "NSPhotoLibraryAddUsageDescription": "SoloShot needs permission to save generated photos to your library."
+      }
     },
     "android": {
       "adaptiveIcon": {
