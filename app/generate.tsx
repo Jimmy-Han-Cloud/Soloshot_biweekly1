@@ -2,9 +2,9 @@ import { router } from 'expo-router'
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native'
 import { StyleSelector } from '@/components/StyleSelector'
 import { useGenerationStore } from '@/store/useGenerationStore'
-import { invokeGenerate } from '@/lib/supabase'
-import { compressImage, uriToBase64 } from '@/lib/imageUtils'
-import { GENERATION_OUTPUT_COUNT } from '@/constants'
+import { invokeGenerate, uploadImage } from '@/lib/supabase'
+import { compressImage } from '@/lib/imageUtils'
+import { GENERATION_OUTPUT_COUNT, STORAGE_BUCKET_REFERENCE } from '@/constants'
 
 const STATUS_LABELS: Record<string, string> = {
   compressing: 'Compressing images…',
@@ -38,22 +38,27 @@ export default function GenerateScreen() {
 
     try {
       setStatus('compressing')
+      const session = Date.now()
 
       const [compressedSelfie, ...compressedRefs] = await Promise.all([
         compressImage(selfieUri),
         ...referenceImages.map((img) => compressImage(img.uri)),
       ])
 
-      const [selfieBase64, ...refBase64s] = await Promise.all([
-        uriToBase64(compressedSelfie),
-        ...compressedRefs.map((uri) => uriToBase64(uri)),
+      setStatus('uploading')
+
+      const [selfieUrl, ...refUrls] = await Promise.all([
+        uploadImage(STORAGE_BUCKET_REFERENCE, `selfie_${session}.jpg`, compressedSelfie),
+        ...compressedRefs.map((uri, i) =>
+          uploadImage(STORAGE_BUCKET_REFERENCE, `ref_${session}_${i}.jpg`, uri)
+        ),
       ])
 
       setStatus('generating')
 
       const output = await invokeGenerate({
-        selfie_image: selfieBase64,
-        reference_images: refBase64s,
+        selfie_url: selfieUrl,
+        reference_urls: refUrls,
         style: selectedStyle,
         num_outputs: GENERATION_OUTPUT_COUNT,
       })

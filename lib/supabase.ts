@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { File } from 'expo-file-system'
 import { ReplicateInput } from '@/lib/replicate'
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''
@@ -7,19 +8,20 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? ''
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 /**
- * Upload a base64-encoded image to a Supabase Storage bucket.
+ * Upload a local file URI to a Supabase Storage bucket.
  * Returns the public URL of the uploaded file.
  */
 export async function uploadImage(
   bucket: string,
   path: string,
-  base64: string
+  uri: string
 ): Promise<string> {
-  const body = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const file = new File(uri)
+  const buffer = await file.arrayBuffer()
 
   const { error } = await supabase.storage
     .from(bucket)
-    .upload(path, body, { contentType: 'image/jpeg', upsert: true })
+    .upload(path, buffer, { contentType: 'image/jpeg', upsert: true })
 
   if (error) throw new Error(`Upload failed: ${error.message}`)
 

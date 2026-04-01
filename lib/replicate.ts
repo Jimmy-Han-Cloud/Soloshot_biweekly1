@@ -1,8 +1,8 @@
 import { StyleOption } from '@/constants'
 
 export interface ReplicateInput {
-  selfie_image: string        // base64 data URI
-  reference_images: string[]  // base64 data URIs
+  selfie_url: string        // public Supabase Storage URL
+  reference_urls: string[]  // public Supabase Storage URLs
   style: StyleOption
   num_outputs: number
 }
