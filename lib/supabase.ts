@@ -38,7 +38,19 @@ export async function invokeGenerate(payload: ReplicateInput): Promise<string[]>
     body: payload,
   })
 
-  if (error) throw new Error(`Generation failed: ${error.message}`)
+  if (error) {
+    // Try to extract the actual error message from the Edge Function response body
+    const context = (error as { context?: { json?: () => Promise<{error?: string}> } }).context
+    if (context?.json) {
+      try {
+        const body = await context.json()
+        if (body?.error) throw new Error(body.error)
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message !== 'Generation failed') throw parseErr
+      }
+    }
+    throw new Error(`Generation failed: ${error.message}`)
+  }
 
   const result = data as { output?: string[]; error?: string }
   if (result.error) throw new Error(result.error)
