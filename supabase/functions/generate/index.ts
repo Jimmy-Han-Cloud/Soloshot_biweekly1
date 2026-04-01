@@ -1,6 +1,4 @@
 const REPLICATE_API_URL = 'https://api.replicate.com/v1'
-// Face swap: puts selfie face onto reference full-body photos
-const FACESWAP_VERSION = 'd1d6ea8c8be89d664a07a457526f7128109dee7030fdac424788d762c71ed111'
 
 const POLL_INTERVAL_MS = 2000
 const TIMEOUT_MS = 120_000
@@ -11,8 +9,8 @@ const corsHeaders = {
 }
 
 interface RequestPayload {
-  selfie_url: string        // public URL — face source
-  reference_urls: string[]  // public URLs — full-body target photos
+  selfie_url: string        // PRIMARY: selfie with travel background
+  reference_urls: string[]  // REFERENCE: full-body photos for body style guidance
   style: 'realistic' | 'stylized'
   num_outputs: number
 }
@@ -24,37 +22,74 @@ interface ReplicatePrediction {
   error: string | null
 }
 
-async function swapFace(
+async function generateFullBody(
   token: string,
-  bodyImageUrl: string,  // target: full-body reference photo
-  faceImageUrl: string   // source: selfie
-): Promise<string> {
-  const response = await fetch(`${REPLICATE_API_URL}/predictions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+  payload: RequestPayload
+): Promise<string[]> {
+  // The selfie is the PRIMARY image — we keep the face + background
+  // and generate the full body extending downward.
+  // strength 0.55 = keep ~45% of original (face + background preserved),
+  // generate the rest (body below frame)
+
+  const stylePrompt =
+    payload.style === 'stylized'
+      ? 'full body portrait of this person, stylized, showing complete body from head to toe, same travel location background, whole body visible including legs and feet'
+      : 'full body photo of this person standing, showing complete body from head to toe, same travel location background, natural lighting, professional photography, whole body visible including legs and feet'
+
+  const negativePrompt =
+    'cropped body, missing legs, missing feet, cut off, floating, deformed, ugly, bad anatomy, blurry'
+
+  const body = {
+    input: {
+      prompt: stylePrompt,
+      negative_prompt: negativePrompt,
+      image: payload.selfie_url,
+      strength: 0.6,
+      num_outputs: payload.num_outputs ?? 3,
+      aspect_ratio: '2:3',   // portrait ratio — ensures room for full body
+      output_format: 'jpg',
+      guidance_scale: 3.5,
+      num_inference_steps: 28,
     },
-    body: JSON.stringify({
-      version: FACESWAP_VERSION,
-      input: {
-        input_image: bodyImageUrl,  // body stays, face gets replaced
-        swap_image: faceImageUrl,   // face comes from selfie
+  }
+
+  console.log('Generating full body from selfie (flux-dev img2img)')
+  console.log('Selfie URL:', payload.selfie_url)
+  console.log('Refs count:', payload.reference_urls.length)
+
+  const response = await fetch(
+    `${REPLICATE_API_URL}/models/black-forest-labs/flux-dev/predictions`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'wait',
       },
-    }),
-  })
+      body: JSON.stringify(body),
+    }
+  )
 
   const responseText = await response.text()
+  console.log('Replicate status:', response.status)
   if (!response.ok) {
-    throw new Error(`Face swap create failed (${response.status}): ${responseText}`)
+    throw new Error(`Replicate failed (${response.status}): ${responseText}`)
   }
 
   const prediction = JSON.parse(responseText) as ReplicatePrediction
-  console.log('Face swap prediction started:', prediction.id)
-  return await pollForResult(token, prediction.id)
+
+  let output: string[]
+  if (prediction.status === 'succeeded' && prediction.output) {
+    const out = prediction.output
+    output = Array.isArray(out) ? out : [out]
+  } else {
+    output = await pollPrediction(token, prediction.id)
+  }
+
+  return output
 }
 
-async function pollForResult(token: string, predictionId: string): Promise<string> {
+async function pollPrediction(token: string, predictionId: string): Promise<string[]> {
   const deadline = Date.now() + TIMEOUT_MS
 
   while (Date.now() < deadline) {
@@ -73,14 +108,13 @@ async function pollForResult(token: string, predictionId: string): Promise<strin
     console.log('Poll status:', prediction.status)
 
     if (prediction.status === 'succeeded') {
-      // output can be a string or string[]
+      if (!prediction.output) throw new Error('No output returned')
       const out = prediction.output
-      if (!out) throw new Error('No output returned')
-      return Array.isArray(out) ? out[0] : out
+      return Array.isArray(out) ? out : [out]
     }
 
     if (prediction.status === 'failed' || prediction.status === 'canceled') {
-      throw new Error(`Prediction ${prediction.status}: ${prediction.error ?? 'unknown error'}`)
+      throw new Error(`Prediction ${prediction.status}: ${prediction.error ?? 'unknown'}`)
     }
   }
 
@@ -97,21 +131,14 @@ Deno.serve(async (req: Request) => {
     if (!token) throw new Error('REPLICATE_API_TOKEN is not configured')
 
     const payload = (await req.json()) as RequestPayload
-    console.log('style:', payload.style, 'refs:', payload.reference_urls?.length)
+    console.log('style:', payload.style, 'num_outputs:', payload.num_outputs)
 
     if (!payload.selfie_url) throw new Error('selfie_url is required')
     if (!payload.reference_urls || payload.reference_urls.length === 0) {
       throw new Error('At least one reference_url is required')
     }
 
-    // Run face swap on each reference photo (up to num_outputs), in parallel
-    const targets = payload.reference_urls.slice(0, payload.num_outputs ?? 3)
-    console.log('Running face swap on', targets.length, 'reference photos')
-
-    const output = await Promise.all(
-      targets.map((bodyUrl) => swapFace(token, bodyUrl, payload.selfie_url))
-    )
-
+    const output = await generateFullBody(token, payload)
     console.log('Done, output count:', output.length)
 
     return new Response(JSON.stringify({ output }), {
