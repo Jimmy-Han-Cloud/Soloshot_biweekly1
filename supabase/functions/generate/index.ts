@@ -1,6 +1,6 @@
 const REPLICATE_API_URL = 'https://api.replicate.com/v1'
-// PhotoMaker: identity-preserving model, uses "img" as trigger word in prompt
-const PHOTOMAKER_VERSION = 'ddfc2b08d209f9fa8c1eca692712918bd449f695dabb4a958da31802a9570fe4'
+// Face swap: puts selfie face onto reference full-body photos
+const FACESWAP_VERSION = 'd1d6ea8c8be89d664a07a457526f7128109dee7030fdac424788d762c71ed111'
 
 const POLL_INTERVAL_MS = 2000
 const TIMEOUT_MS = 120_000
@@ -11,8 +11,8 @@ const corsHeaders = {
 }
 
 interface RequestPayload {
-  selfie_url: string        // public Supabase Storage URL
-  reference_urls: string[]  // public Supabase Storage URLs
+  selfie_url: string        // public URL — face source
+  reference_urls: string[]  // public URLs — full-body target photos
   style: 'realistic' | 'stylized'
   num_outputs: number
 }
@@ -20,67 +20,41 @@ interface RequestPayload {
 interface ReplicatePrediction {
   id: string
   status: 'starting' | 'processing' | 'succeeded' | 'failed' | 'canceled'
-  output: string[] | null
+  output: string | string[] | null
   error: string | null
 }
 
-async function createPrediction(
+async function swapFace(
   token: string,
-  payload: RequestPayload
-): Promise<ReplicatePrediction> {
-  // "img" is the required trigger word for PhotoMaker identity conditioning
-  const stylePrompt =
-    payload.style === 'stylized'
-      ? 'full body portrait of a person img, stylized illustration, vibrant colors, standing in a travel location, whole body visible'
-      : 'full body photo of a person img, standing in a scenic travel location, natural lighting, high quality, professional photography, whole body visible'
-
-  const negativePrompt =
-    'deformed, ugly, bad anatomy, bad quality, cropped, missing limbs, extra limbs, lowres, blurry'
-
-  // Build input with selfie URL + up to 3 reference URLs for better identity matching
-  const refs = payload.reference_urls.slice(0, 3)
-  const input: Record<string, unknown> = {
-    prompt: stylePrompt,
-    negative_prompt: negativePrompt,
-    input_image: payload.selfie_url,
-    num_outputs: payload.num_outputs ?? 3,
-    num_steps: 20,
-    style_name: payload.style === 'stylized' ? 'Disney Charactor' : 'Photographic (Default)',
-    style_strength_ratio: 20,
-    guidance_scale: 5,
-    disable_safety_checker: true,
-  }
-
-  if (refs[0]) input['input_image2'] = refs[0]
-  if (refs[1]) input['input_image3'] = refs[1]
-  if (refs[2]) input['input_image4'] = refs[2]
-
-  console.log('Creating PhotoMaker prediction, refs count:', refs.length)
-
+  bodyImageUrl: string,  // target: full-body reference photo
+  faceImageUrl: string   // source: selfie
+): Promise<string> {
   const response = await fetch(`${REPLICATE_API_URL}/predictions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ version: PHOTOMAKER_VERSION, input }),
+    body: JSON.stringify({
+      version: FACESWAP_VERSION,
+      input: {
+        input_image: bodyImageUrl,  // body stays, face gets replaced
+        swap_image: faceImageUrl,   // face comes from selfie
+      },
+    }),
   })
 
   const responseText = await response.text()
-  console.log('Replicate create status:', response.status)
-  console.log('Replicate response:', responseText.slice(0, 300))
-
   if (!response.ok) {
-    throw new Error(`Replicate create failed (${response.status}): ${responseText}`)
+    throw new Error(`Face swap create failed (${response.status}): ${responseText}`)
   }
 
-  return JSON.parse(responseText) as ReplicatePrediction
+  const prediction = JSON.parse(responseText) as ReplicatePrediction
+  console.log('Face swap prediction started:', prediction.id)
+  return await pollForResult(token, prediction.id)
 }
 
-async function pollPrediction(
-  token: string,
-  predictionId: string
-): Promise<string[]> {
+async function pollForResult(token: string, predictionId: string): Promise<string> {
   const deadline = Date.now() + TIMEOUT_MS
 
   while (Date.now() < deadline) {
@@ -99,10 +73,10 @@ async function pollPrediction(
     console.log('Poll status:', prediction.status)
 
     if (prediction.status === 'succeeded') {
-      if (!prediction.output || prediction.output.length === 0) {
-        throw new Error('Prediction succeeded but returned no output')
-      }
-      return prediction.output
+      // output can be a string or string[]
+      const out = prediction.output
+      if (!out) throw new Error('No output returned')
+      return Array.isArray(out) ? out[0] : out
     }
 
     if (prediction.status === 'failed' || prediction.status === 'canceled') {
@@ -122,22 +96,21 @@ Deno.serve(async (req: Request) => {
     const token = Deno.env.get('REPLICATE_API_TOKEN')
     if (!token) throw new Error('REPLICATE_API_TOKEN is not configured')
 
-    console.log('Token present:', token.slice(0, 6) + '...')
-
     const payload = (await req.json()) as RequestPayload
-    console.log('style:', payload.style, 'num_outputs:', payload.num_outputs, 'refs:', payload.reference_urls?.length)
+    console.log('style:', payload.style, 'refs:', payload.reference_urls?.length)
 
     if (!payload.selfie_url) throw new Error('selfie_url is required')
     if (!payload.reference_urls || payload.reference_urls.length === 0) {
       throw new Error('At least one reference_url is required')
     }
 
-    const prediction = await createPrediction(token, payload)
+    // Run face swap on each reference photo (up to num_outputs), in parallel
+    const targets = payload.reference_urls.slice(0, payload.num_outputs ?? 3)
+    console.log('Running face swap on', targets.length, 'reference photos')
 
-    const output =
-      prediction.status === 'succeeded' && prediction.output
-        ? prediction.output
-        : await pollPrediction(token, prediction.id)
+    const output = await Promise.all(
+      targets.map((bodyUrl) => swapFace(token, bodyUrl, payload.selfie_url))
+    )
 
     console.log('Done, output count:', output.length)
 
